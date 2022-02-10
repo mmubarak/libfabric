@@ -119,7 +119,7 @@ struct fi_rma_iov remote;
 
 struct ft_opts opts;
 
-struct test_size_param test_size[] = {
+struct test_size_param all_test_size[] = {
 	{ 1 <<  0, 0 },
 	{ 1 <<  1, 0 }, { (1 <<  1) + (1 <<  0), 0 },
 	{ 1 <<  2, 0 }, { (1 <<  2) + (1 <<  1), 0 },
@@ -146,7 +146,11 @@ struct test_size_param test_size[] = {
 	{ 1 << 23, 0 },
 };
 
-const unsigned int test_cnt = (sizeof test_size / sizeof test_size[0]);
+unsigned int test_cnt = (sizeof all_test_size / sizeof all_test_size[0]);
+
+struct test_size_param * test_size = all_test_size;
+/* range of messages is dynamically allocated */
+struct test_size_param * range_test_size = NULL;
 
 static const char integ_alphabet[] = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
 static const int integ_alphabet_length = (sizeof(integ_alphabet)/sizeof(*integ_alphabet)) - 1;
@@ -1598,6 +1602,9 @@ void ft_free_res(void)
 
 	ft_close_fids();
 
+	if (range_test_size) {
+		free (range_test_size);
+	}
 	if (buf) {
 		ret = ft_hmem_free(opts.iface, buf);
 		if (ret)
@@ -2924,7 +2931,7 @@ void ft_csusage(char *name, char *desc)
 	FT_PRINT_OPTS_USAGE("-I <number>", "number of iterations");
 	FT_PRINT_OPTS_USAGE("-Q", "bind EQ to domain (vs. endpoint)");
 	FT_PRINT_OPTS_USAGE("-w <number>", "number of warmup iterations");
-	FT_PRINT_OPTS_USAGE("-S <size>", "specific transfer size or 'all'");
+	FT_PRINT_OPTS_USAGE("-S <size>", "specific transfer size or a range of sizes (syntax r:start,inc,end) or 'all'");
 	FT_PRINT_OPTS_USAGE("-l", "align transmit and receive buffers to page size");
 	FT_PRINT_OPTS_USAGE("-m", "machine readable output");
 	FT_PRINT_OPTS_USAGE("-D <device_iface>", "Specify device interface: "
@@ -3061,6 +3068,44 @@ void ft_parse_hmem_opts(int op, char *optarg, struct ft_opts *opts)
 	}
 }
 
+void parse_opts_range (char* optarg)
+{
+       /* create a substring, take off prefix */
+       int rem_str_len = strlen (optarg) - 2;
+       char rem_str [rem_str_len];
+       strncpy (rem_str, &optarg[2], rem_str_len);
+
+       /* use string tokenizer */
+       const int MAX_TOKS = 3;
+       int inputs [MAX_TOKS];
+       const char* delim = ",";
+       char* token = strtok (rem_str, delim);
+       int j = 0;
+
+       while (token != NULL)
+       {
+	       inputs[j] = atoi (token);
+	       assert (j < MAX_TOKS);
+	       /* parse next token */
+	       token = strtok (NULL, delim);
+	       j++;
+       }
+       int start = inputs[0], inc = inputs[1], end = inputs[2];
+
+       /* populate the array */
+       int i;
+       int test_range_cnt = (end - start) / inc + 1;
+       TEST_CNT = test_range_cnt;
+       range_test_size = malloc (sizeof (struct test_size_param) * test_range_cnt);
+       for (i = 0; i < test_range_cnt && i < end; i++)
+       {
+	       size_t val = start + (i * inc);
+	       range_test_size [i].size = val;
+	       range_test_size [i].enable_flags = 0;
+       }
+       test_size = range_test_size;
+}
+
 void ft_parsecsopts(int op, char *optarg, struct ft_opts *opts)
 {
 	ft_parse_addr_opts(op, optarg, opts);
@@ -3075,7 +3120,10 @@ void ft_parsecsopts(int op, char *optarg, struct ft_opts *opts)
 		break;
 	case 'S':
 		if (!strncasecmp("all", optarg, 3)) {
-			opts->sizes_enabled = FT_ENABLE_ALL;
+			opts->sizes_enabled = FT_ENABLE_SIZES;
+		} else if (!strncasecmp("r:", optarg, 2)){
+			opts->sizes_enabled = FT_ENABLE_SIZES;
+			parse_opts_range (optarg);
 		} else {
 			opts->options |= FT_OPT_SIZE;
 			opts->transfer_size = atol(optarg);
